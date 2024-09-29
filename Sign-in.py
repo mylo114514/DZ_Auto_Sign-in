@@ -1,4 +1,3 @@
-import os
 import urllib.parse
 import urllib.request
 import requests
@@ -30,14 +29,10 @@ headers = {
 
 # 配置多账号信息
 accounts = [
-    {'username': 'username1', 'password': 'password1'},
-    {'username': 'username2', 'password': 'password2'}
+    {'username': 'USERNAME1', 'password': 'PASSWORD1'},
+#    {'username': 'USERNAME2', 'password': 'PASSWORD2'}
 
 ]
-
-
-SENDKEY = os.getenv('SENDKEY', ftqq_key)
-BARK_BASE_URL = os.getenv('BARK_BASE_URL', Bark_key_url)
 
 # 日志配置
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -74,76 +69,100 @@ def retry_request(url, method='GET', data=None, retries=3, timeout=10):
 
 def login(account):
     """
-    执行账号登录
-    :param account: 账号信息字典
-    :return: 是否登录成功 (True/False)
+    登录论坛，检查登录是否成功
+    :param account: 账号信息
+    :return: 登录是否成功 (True/False)
     """
-    payload = {
-        'username': account['username'],
-        'password': account['password'],
-        'questionid': '0',
-        'answer': ''
-    }
-    response = retry_request(login_url, method='POST', data=payload)
-    if response:
-        logging.info(f"✔️账号 {account['username']} 登录成功")
-    return response and "欢迎您回来" in response.text
+    try:
+        # 登录表单数据
+        login_data = {
+            'username': account['username'],
+            'password': account['password'],
+            'loginsubmit': 'yes',
+            'lssubmit': 'yes'
+        }
+
+        # 发送登录请求
+        response = retry_request(login_url, method='POST', data=login_data)
+
+        if response.status_code == 200:
+            # logging.info(f"登录请求返回内容: {response.text}")
+
+            # 检查返回的页面内容是否包含登录成功的标识
+            if "欢迎您回来" in response.text or "登录成功" in response.text:
+                logging.info(f"✔️账号 {account['username']} 登录成功")
+                return True
+            elif "请输入验证码后继续登录" in response.text:
+                logging.error(f"❌账号 {account['username']} 登录失败，遇到验证码")
+                return False
+            elif "密码错误次数过多" in response.text:
+                logging.error(f"❌账号 {account['username']} 被锁定，密码错误次数过多，请稍后再试")
+                return False
+            elif "密码错误" in response.text or "登录失败" in response.text:
+                logging.error(f"❌账号 {account['username']} 登录失败，密码错误")
+                return False
+            else:
+                logging.error(f"❌账号 {account['username']} 登录失败，未知错误")
+                return False
+        else:
+            logging.error(f"登录请求失败，状态码: {response.status_code}")
+            return False
+    except Exception as e:
+        logging.error(f"登录时发生错误: {str(e)}")
+        return False
 
 
 def get_sign_in_form_data():
     """
-    获取签到页面表单数据
-    :return: 包含formhash等表单数据的字典，或"已签到"提示
+    获取签到页面的表单数据。
+    :return: 表单数据或'已签到'字符串
     """
-    response = retry_request(sign_in_page_url)
-    if response:
-        soup = BeautifulSoup(response.text, 'html.parser')
+    try:
+        response = retry_request(sign_in_page_url)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 检查是否已经签到
-        if "您今日已经签过到" in response.text:
-            return "已签到"
+            if "已签到" in response.text:
+                logging.info("账号已经签到，无需再次签到")
+                return "已签到"
 
-        # 提取表单字段
-        formhash = soup.find('input', {'name': 'formhash'})
-        signsubmit = soup.find('input', {'name': 'signsubmit'})
-        handlekey = soup.find('input', {'name': 'handlekey'})
-        referer = soup.find('input', {'name': 'referer'})
-
-        if formhash and signsubmit and handlekey and referer:
-            return {
-                'formhash': formhash['value'],
-                'signsubmit': signsubmit['value'],
-                'handlekey': handlekey['value'],
-                'referer': referer['value']
-            }
-    return None
-
+            form = soup.find('form', {'id': 'signform'})
+            if form:
+                form_data = {input_tag['name']: input_tag.get('value', '') for input_tag in form.find_all('input') if 'name' in input_tag.attrs}
+                form_data['emotid'] = '1'
+                form_data['content'] = '记上一笔，hold住我的快乐！'
+                logging.info(f"提取的表单数据: {form_data}")
+                return form_data
+            else:
+                return "已签到"
+        else:
+            logging.error(f"获取签到页面失败，状态码: {response.status_code}")
+            return None
+    except Exception as e:
+        logging.error(f"获取签到表单时发生错误: {str(e)}")
+        return None
 
 def sign_in(form_data):
     """
-    执行签到
-    :param form_data: 表单数据字典
-    :return: 签到结果 (成功/失败/已签到)
+    提交签到请求
+    :param form_data: 提取到的签到表单数据
+    :return: 签到结果字符串
     """
-    emotid = '1'
-    content = "记上一笔，hold住我的快乐！"
-
-    sign_in_data = {
-        'formhash': form_data['formhash'],
-        'signsubmit': form_data['signsubmit'],
-        'handlekey': form_data['handlekey'],
-        'referer': form_data['referer'],
-        'emotid': emotid,
-        'content': content
-    }
-
-    response = retry_request(sign_in_url, method='POST', data=sign_in_data)
-    if response:
-        if "签到成功" in response.text:
-            return "签到成功"
-        elif "已经签过到" in response.text:
-            return "已签到"
-    return "签到失败"
+    try:
+        response = retry_request(sign_in_url, method='POST', data=form_data)
+        if response.status_code == 200:
+            # 改进成功提示匹配逻辑，确保能捕获到签到成功的标识
+            if "签到成功" in response.text or "succeedhandle_signin" in response.text:
+                return "签到成功"
+            else:
+                logging.warning("签到未成功，响应中未找到成功提示")
+                return "签到失败"
+        else:
+            logging.error(f"签到请求失败，状态码: {response.status_code}")
+            return "签到请求失败"
+    except Exception as e:
+        logging.error(f"提交签到请求时发生错误: {str(e)}")
+        return "签到异常"
 
 
 def ftqq_push(all_results, key, retries=3):
@@ -158,7 +177,7 @@ def ftqq_push(all_results, key, retries=3):
         return
 
     text = "🌏️签到结果汇总"
-    desp = "\n".join(all_results[:2000])  # 限制内容长度避免超长
+    desp = "\n".join(all_results[:2000])
 
     postdata = urllib.parse.urlencode({'text': text[:64], 'desp': desp}).encode('utf-8')
     url = f'https://sctapi.ftqq.com/{key}.send'
@@ -169,10 +188,9 @@ def ftqq_push(all_results, key, retries=3):
             with urllib.request.urlopen(req) as response:
                 result = response.read().decode('utf-8')
 
-                # 修正推送成功的判断逻辑，基于 errno 和 error
                 result_json = json.loads(result)
                 if result_json.get('data', {}).get('errno') == 0 and result_json.get('data', {}).get('error') == "SUCCESS":
-                    logging.info(f"✈️Server酱消息推送成功，响应: {result}")
+                    logging.info(f"✈️Server酱消息推送成功!")
                     return True  # 推送成功
                 else:
                     logging.error(f"⚠️Server酱推送失败，响应内容: {result}")
@@ -235,15 +253,27 @@ def sign_in_for_account(account):
     :return: 签到结果字符串
     """
     logging.info(f"📡正在为账号 {account['username']} 登录签到中...")
-    if login(account):
-        form_data = get_sign_in_form_data()
-        if form_data == "已签到":
-            return f"🎯账号 {account['username']}: 已经签过到了！"
-        if isinstance(form_data, dict):
-            result = sign_in(form_data)
-            return f"🎯账号 {account['username']}: {result}"
-        return f"⚠️账号 {account['username']}: 获取签到表单失败"
-    return f"⚠️账号 {account['username']}: 登录失败"
+
+    # 每次为新账户创建一个独立的 session
+    global session
+    session = requests.Session()
+
+    # 查看登录状态
+    if not login(account):
+        return f"❌️账号 {account['username']}: 登录失败，无法签到"
+
+    # 获取签到表单数据
+    form_data = get_sign_in_form_data()
+
+    if form_data == "已签到":
+        return f"🎯账号 {account['username']}: 已经签过到了！"
+
+    if isinstance(form_data, dict):
+        result = sign_in(form_data)
+        return f"🎯账号 {account['username']}: {result}"
+
+    # 如果表单获取失败，返回相应的错误信息
+    return f"⚠️账号 {account['username']}: 获取签到表单失败"
 
 
 def sign_in_for_all_accounts():
@@ -257,8 +287,8 @@ def sign_in_for_all_accounts():
         logging.info(result)
 
     # Server酱推送
-    if SENDKEY:
-        if ftqq_push(results, SENDKEY):
+    if ftqq_key:
+        if ftqq_push(results, ftqq_key):
             logging.info("✈️所有账号的签到结果已通过Server酱推送。")
         else:
             logging.error("❌️Server酱消息推送失败。")
@@ -266,15 +296,15 @@ def sign_in_for_all_accounts():
         logging.info("⚠️未检测到 Server酱 的 SENDKEY，跳过推送。")
 
     # Bark推送
-    if BARK_BASE_URL:
+    if Bark_key_url:
         bark_push(
-            bark_base_url=BARK_BASE_URL,
+            bark_base_url=Bark_key_url,
             title="🌏️签到结果汇总",
             body="\n".join(results),
             extra_params={"badge": 1, "level": "passive"} #Bark推送额外参数
         )
     else:
-        logging.info("❌️未检测到 Bark 的基础URL，跳过推送。")
+        logging.info("⚠️未检测到 Bark 的基础URL，跳过推送。")
 
 
 if __name__ == '__main__':
