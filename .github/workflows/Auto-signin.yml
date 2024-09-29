@@ -42,4 +42,4 @@ jobs:
           # 可以继续添加更多账户...
 
         run: |
-          python main_yaml.py
+          python Sign-in.py
